@@ -2545,9 +2545,25 @@ function renderParkProfile() {
 // ===========================================================
 // ADMIN — DASHBOARD
 // ===========================================================
+
+// Garde de sécurité centrale : toute action de création, modification
+// ou suppression doit passer par ici. Elle est appelée dans chaque
+// fonction d'écriture (pas seulement à l'affichage du menu), pour
+// qu'un client ne puisse rien déclencher même en tapant l'URL admin
+// directement ou en appelant les fonctions depuis la console du
+// navigateur. La base Supabase applique en plus ses propres règles
+// (RLS) côté serveur : c'est cette double barrière qui protège.
+function requireAdmin(silent) {
+  if (!state.user?.is_admin) {
+    if (!silent) toast("Action réservée à l'administrateur");
+    return false;
+  }
+  return true;
+}
+
 async function renderAdmin(params) {
   if (!requireAuth()) return;
-  if (!state.user.is_admin) { toast("Accès réservé à l'administrateur"); return navigate("catalogue"); }
+  if (!requireAdmin()) return navigate("catalogue");
 
   app.innerHTML = "";
   app.appendChild($("#tpl-admin-dashboard").content.cloneNode(true));
@@ -2575,6 +2591,7 @@ async function renderAdmin(params) {
 }
 
 function renderAdminTab(tab) {
+  if (!requireAdmin()) return;
   const panel = $("#admin-panel");
   panel.innerHTML = "";
   if (tab === "listings") return renderAdminListings(panel);
@@ -2584,6 +2601,7 @@ function renderAdminTab(tab) {
 }
 
 function renderAdminListings(panel) {
+  if (!requireAdmin()) return;
   panel.appendChild($("#tpl-admin-listings").content.cloneNode(true));
   $("#admin-listings-count", panel).textContent = `${state.listings.length} annonce${state.listings.length > 1 ? "s" : ""}`;
   const table = $("#admin-listings-table", panel);
@@ -2609,6 +2627,7 @@ function renderAdminListings(panel) {
 }
 
 async function toggleListingStatus(l) {
+  if (!requireAdmin()) return;
   const newStatus = l.status === "publie" ? "masque" : "publie";
   const { error } = await sb.from("listings").update({ status: newStatus }).eq("id", l.id);
   if (error) return toast("Erreur : " + errMsg(error));
@@ -2618,6 +2637,7 @@ async function toggleListingStatus(l) {
 }
 
 async function deleteListing(l) {
+  if (!requireAdmin()) return;
   if (!confirm("Supprimer définitivement cette annonce ?")) return;
   const { error } = await sb.from("listings").delete().eq("id", l.id);
   if (error) return toast("Erreur : " + errMsg(error));
@@ -2628,6 +2648,7 @@ async function deleteListing(l) {
 
 // ---------- ADMIN: PARKS ----------
 function renderAdminParks(panel) {
+  if (!requireAdmin()) return;
   panel.appendChild($("#tpl-admin-parks").content.cloneNode(true));
   const form = $("#form-park", panel);
   const existing = state.parks[0];
@@ -2821,6 +2842,7 @@ async function uploadParkVideo(file, parkId) {
 
 // ---------- ADMIN: INBOX ----------
 async function renderAdminInbox(panel) {
+  if (!requireAdmin()) return;
   panel.appendChild($("#tpl-admin-inbox").content.cloneNode(true));
   const { data, error } = await sb.from("messages")
     .select("*, listings(type_bien, brand, model)")
@@ -2855,6 +2877,7 @@ async function renderAdminInbox(panel) {
 // ADMIN — TUNNEL "EXPRESS < 3 MIN"
 // ===========================================================
 function renderAdminNewListing(panel) {
+  if (!requireAdmin()) return;
   panel.appendChild($("#tpl-admin-new-listing").content.cloneNode(true));
   resetWizard();
   startWizardTimer(panel);
@@ -3148,6 +3171,7 @@ async function uploadPhoto(file, listingId, slot) {
 }
 
 async function publishListing(panel) {
+  if (!requireAdmin()) return;
   const d = collectWizardData(panel);
   if (!d.price) return toast("Merci d'indiquer un prix");
   if (!state.wizard.photos.exterieur || !state.wizard.photos.salon || !state.wizard.photos.cuisine) {
