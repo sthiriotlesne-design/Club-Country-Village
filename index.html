@@ -1508,8 +1508,8 @@ input,select,textarea{font-family:inherit}
 //    pour créer toutes les tables nécessaires.
 // ===========================================================
 
-const SUPABASE_URL = "https://gtnkerdyhdvbwawwelex.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_iRE_nyU2TYdtyCLlgWv2OA_jfsYdTQW";
+const SUPABASE_URL = "https://fmnlbkkyjxhqdqijwmej.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_OYvaAiG3FPKDDYmW63AojA_yXyzESvT";
 
 // Email unique autorisé à administrer le site (back-office)
 const ADMIN_EMAIL = "contact@chesnaie.eu";
@@ -1674,6 +1674,7 @@ function parseHash() {
 async function router() {
   const { path, params } = parseHash();
   highlightNav(path);
+  applyRoleVisibility();
 
   if (path === "catalogue") return renderCatalogue(params);
   if (path === "login") return renderLogin();
@@ -1734,26 +1735,52 @@ async function initAuth() {
 
 async function loadProfile(authUser) {
   const { data, error } = await sb.from("profiles").select("*").eq("id", authUser.id).single();
-  if (error) { console.error(error); return; }
+
+  // Sécurité "fail-closed" : si le profil ne peut pas être lu (erreur
+  // réseau, ligne absente, règle RLS…), on considère l'utilisateur comme
+  // un client sans droits — jamais comme admin. Sans ça, un ancien état
+  // admin en mémoire (ex. après un passage en mode test) pourrait rester
+  // actif pour la personne suivante qui se connecte.
+  if (error || !data) {
+    if (error) console.error(error);
+    state.user = {
+      id: authUser.id, email: authUser.email,
+      full_name: "", is_admin: false
+    };
+    return;
+  }
+
   state.user = {
     id: authUser.id, email: authUser.email,
-    full_name: data?.full_name || "", is_admin: !!data?.is_admin
+    full_name: data.full_name || "", is_admin: data.is_admin === true
   };
+}
+
+// Vérité unique sur le rôle : tout l'affichage et toutes les
+// autorisations en découlent.
+function isAdmin() {
+  return state.user?.is_admin === true;
+}
+
+// Applique la visibilité des éléments réservés à l'admin. Appelée à
+// chaque navigation ET à chaque changement de session, pour que le
+// bouton ne puisse jamais rester affiché par inertie.
+function applyRoleVisibility() {
+  const bottomPublish = $("#bottom-nav-publish");
+  if (bottomPublish) bottomPublish.hidden = !isAdmin();
 }
 
 function renderAuthArea() {
   const area = $("#auth-area");
-  const bottomPublish = $("#bottom-nav-publish");
 
-  // Le bouton "+ Publier" de la barre du bas n'existe que pour l'admin
-  if (bottomPublish) bottomPublish.hidden = !state.user?.is_admin;
+  applyRoleVisibility();
 
   if (!state.user) {
     area.innerHTML = `<a href="#/login" class="btn btn-outline btn-sm">Se connecter</a>`;
     return;
   }
   const initials = (state.user.full_name || state.user.email).slice(0, 2).toUpperCase();
-  const publishBtn = state.user.is_admin
+  const publishBtn = isAdmin()
     ? `<a href="#/admin?tab=new" class="btn btn-cta btn-sm btn-publish-quick" title="Mettre une annonce en ligne">
          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
          <span>Mettre en ligne</span>
@@ -1762,12 +1789,12 @@ function renderAuthArea() {
   area.innerHTML = `
     ${publishBtn}
     <div class="dropdown-wrap">
-      <button class="user-chip ${state.user.is_admin ? "is-admin" : ""}" id="user-chip-btn">
+      <button class="user-chip ${isAdmin() ? "is-admin" : ""}" id="user-chip-btn">
         <span class="avatar">${initials}</span>
-        ${state.user.is_admin ? "Admin" : (state.user.full_name || "Mon compte")}
+        ${isAdmin() ? "Admin" : (state.user.full_name || "Mon compte")}
       </button>
       <div class="dropdown-menu" id="user-dropdown">
-        ${state.user.is_admin ? `<a href="#/admin">Back-office</a>` : ""}
+        ${isAdmin() ? `<a href="#/admin">Back-office</a>` : ""}
         <a href="#/favoris">Mes favoris</a>
         <a href="#/messages">Mes demandes</a>
         <button id="btn-logout">Se déconnecter</button>
@@ -1810,7 +1837,7 @@ function renderLogin() {
       if (data?.user) await loadProfile(data.user);
       renderAuthArea();
       toast("Bienvenue !");
-      navigate(state.user?.is_admin ? "admin" : "catalogue");
+      navigate(isAdmin() ? "admin" : "catalogue");
     } finally {
       submitBtn.disabled = false;
       submitBtn.textContent = "Se connecter";
@@ -2452,7 +2479,7 @@ function renderParkProfile() {
   // L'admin voit et modifie directement la fiche du camping sur cette
   // même page — pas besoin d'aller dans le back-office séparément.
   // Les visiteurs/clients voient uniquement la version en lecture seule.
-  if (state.user?.is_admin) {
+  if (isAdmin()) {
     const wrapper = document.createElement("div");
     wrapper.className = "simple-layout admin-panel park-edit-wrapper";
     app.appendChild(wrapper);
@@ -2554,7 +2581,7 @@ function renderParkProfile() {
 // navigateur. La base Supabase applique en plus ses propres règles
 // (RLS) côté serveur : c'est cette double barrière qui protège.
 function requireAdmin(silent) {
-  if (!state.user?.is_admin) {
+  if (!isAdmin()) {
     if (!silent) toast("Action réservée à l'administrateur");
     return false;
   }
