@@ -264,6 +264,19 @@ input,select,textarea{font-family:inherit}
 .switch-line{margin-top:20px; font-size:.92rem; text-align:center; color:var(--ink-500)}
 .switch-line a{color:var(--khaki-700); font-weight:700}
 
+/* Messages d'authentification : persistants (contrairement aux toasts
+   fugaces), pour que l'utilisateur puisse lire et corriger tranquillement. */
+.auth-msg{
+  margin:16px 0 0; padding:13px 15px; border-radius:var(--radius-md);
+  font-size:.88rem; line-height:1.5; font-weight:600;
+}
+.auth-msg.is-error{background:#fdeceb; border:1px solid #e8b4ae; color:#8c2f22}
+.auth-msg.is-success{background:var(--khaki-50); border:1px solid var(--khaki-200); color:var(--khaki-700)}
+.auth-msg.is-info{background:#eef4fb; border:1px solid #b9d3ec; color:#1f4d78}
+.auth-msg strong{display:block; margin-bottom:3px}
+.auth-msg .auth-msg-hint{display:block; margin-top:6px; font-weight:500; opacity:.9}
+.field-error{border-color:#d9534f !important}
+
 .user-chip{
   display:flex; align-items:center; gap:10px; padding:6px 14px 6px 6px; border-radius:var(--radius-pill);
   background:#fff; border:2px solid var(--khaki-100); font-size:.9rem; font-weight:700; color:var(--ink-700);
@@ -829,13 +842,14 @@ input,select,textarea{font-family:inherit}
 <template id="tpl-login">
   <div class="auth-panel">
     <h2 class="section-title-sm">Connexion</h2>
-    <p class="muted">Créez un compte pour sauvegarder vos favoris et envoyer des demandes, ou connectez-vous.</p>
-    <form id="form-login" class="stack-form">
-      <label>Email
-        <input type="email" name="email" required autocomplete="email" placeholder="vous@exemple.fr">
+    <p class="muted">Connectez-vous pour retrouver vos favoris et vos demandes.</p>
+    <div class="auth-msg" id="login-msg" hidden></div>
+    <form id="form-login" class="stack-form" novalidate>
+      <label>Adresse e-mail
+        <input type="email" name="email" autocomplete="email" placeholder="vous@exemple.fr">
       </label>
       <label>Mot de passe
-        <input type="password" name="password" required autocomplete="current-password" placeholder="••••••••">
+        <input type="password" name="password" autocomplete="current-password" placeholder="••••••••">
       </label>
       <button type="submit" class="btn btn-primary btn-block">Se connecter</button>
     </form>
@@ -847,15 +861,19 @@ input,select,textarea{font-family:inherit}
   <div class="auth-panel">
     <h2 class="section-title-sm">Créer un compte</h2>
     <p class="muted">Rejoignez le Club pour suivre vos demandes et sauvegarder vos coups de cœur.</p>
-    <form id="form-signup" class="stack-form">
-      <label>Nom
-        <input type="text" name="full_name" required placeholder="Votre nom">
+    <div class="auth-msg" id="signup-msg" hidden></div>
+    <form id="form-signup" class="stack-form" novalidate>
+      <label>Nom et prénom
+        <input type="text" name="full_name" autocomplete="name" placeholder="Jean Dupont">
       </label>
-      <label>Email
-        <input type="email" name="email" required autocomplete="email" placeholder="vous@exemple.fr">
+      <label>Adresse e-mail
+        <input type="email" name="email" autocomplete="email" placeholder="vous@exemple.fr">
       </label>
       <label>Mot de passe
-        <input type="password" name="password" required minlength="6" autocomplete="new-password" placeholder="6 caractères minimum">
+        <input type="password" name="password" autocomplete="new-password" placeholder="8 caractères minimum">
+      </label>
+      <label>Confirmation du mot de passe
+        <input type="password" name="password_confirm" autocomplete="new-password" placeholder="Retapez le mot de passe">
       </label>
       <button type="submit" class="btn btn-primary btn-block">Créer mon compte</button>
     </form>
@@ -1712,14 +1730,15 @@ async function loadProfile(authUser) {
     if (error) console.error(error);
     state.user = {
       id: authUser.id, email: authUser.email,
-      full_name: "", is_admin: false
+      full_name: "", is_admin: false, profileFound: false
     };
     return;
   }
 
   state.user = {
     id: authUser.id, email: authUser.email,
-    full_name: data.full_name || "", is_admin: data.is_admin === true
+    full_name: data.full_name || "", is_admin: data.is_admin === true,
+    profileFound: true
   };
 }
 
@@ -1813,29 +1832,140 @@ function renderAuthArea() {
 }
 document.addEventListener("click", () => $("#user-dropdown")?.classList.remove("open"));
 
+// ===========================================================
+// AUTHENTIFICATION — messages, validation, diagnostic
+// ===========================================================
+
+// Affiche un message persistant dans le formulaire (et non un toast
+// fugace), pour que l'utilisateur puisse le lire et corriger.
+function showAuthMsg(id, kind, title, hint) {
+  const el = $("#" + id);
+  if (!el) return;
+  el.className = "auth-msg is-" + kind;
+  el.innerHTML = `<strong>${title}</strong>` + (hint ? `<span class="auth-msg-hint">${hint}</span>` : "");
+  el.hidden = false;
+}
+function clearAuthMsg(id) {
+  const el = $("#" + id);
+  if (el) el.hidden = true;
+}
+
+// Traduit les messages d'erreur techniques de Supabase (en anglais) en
+// explications claires, avec la piste de résolution quand elle est connue.
+function authErrorFr(error) {
+  const raw = (errMsg(error) || "").toLowerCase();
+
+  if (raw.includes("invalid login credentials"))
+    return ["Adresse e-mail ou mot de passe incorrect.", "Vérifiez votre saisie. Si vous n'avez pas encore de compte, créez-en un."];
+
+  if (raw.includes("email not confirmed"))
+    return ["Votre adresse e-mail n'est pas encore confirmée.",
+            "Ouvrez le message de confirmation reçu par e-mail. Vous pouvez aussi désactiver cette exigence dans Supabase : Authentication → Providers → Email → décocher « Confirm email »."];
+
+  if (raw.includes("already registered") || raw.includes("already been registered") || raw.includes("user already exists"))
+    return ["Cette adresse e-mail est déjà utilisée.", "Connectez-vous plutôt, ou utilisez une autre adresse."];
+
+  if (raw.includes("password should be at least") || raw.includes("password is too short"))
+    return ["Mot de passe trop court.", "Choisissez un mot de passe d'au moins 8 caractères."];
+
+  if (raw.includes("invalid email") || raw.includes("unable to validate email"))
+    return ["Adresse e-mail invalide.", "Vérifiez le format, par exemple : nom@domaine.fr"];
+
+  if (raw.includes("weak password") || raw.includes("password is known to be weak"))
+    return ["Mot de passe trop faible.", "Évitez les mots de passe courants ; mélangez lettres, chiffres et symboles."];
+
+  if (raw.includes("rate limit") || raw.includes("too many requests"))
+    return ["Trop de tentatives en peu de temps.", "Patientez quelques minutes avant de réessayer."];
+
+  if (raw.includes("email rate limit"))
+    return ["Limite d'envoi d'e-mails atteinte.", "Supabase limite les e-mails sur les projets gratuits. Désactivez « Confirm email » dans Authentication → Providers → Email pour continuer."];
+
+  // Base de données non initialisée : cause la plus fréquente sur un
+  // projet Supabase tout neuf où le script SQL n'a pas été exécuté.
+  if (raw.includes("database error") || raw.includes("relation") && raw.includes("does not exist"))
+    return ["La base de données n'est pas encore prête.",
+            "Exécutez le script setup-complet.sql dans Supabase (SQL Editor) : les tables nécessaires n'existent pas encore."];
+
+  if (raw.includes("failed to fetch") || raw.includes("networkerror") || raw.includes("impossible de contacter"))
+    return ["Impossible de joindre le serveur.",
+            "Vérifiez votre connexion internet. Si vous ouvrez le fichier depuis l'aperçu de Claude, téléchargez-le et ouvrez-le dans un vrai navigateur."];
+
+  // Message inconnu : on l'affiche tel quel plutôt que de le masquer.
+  return ["La connexion a échoué.", errMsg(error)];
+}
+
+// Vérifie que la base est bien en place. Renvoie true si tout va bien.
+async function checkDatabaseReady() {
+  const { error } = await sb.from("profiles").select("id").limit(1);
+  if (!error) return true;
+  console.error("Base de données non prête :", error);
+  return false;
+}
+
 function renderLogin() {
   app.innerHTML = "";
   app.appendChild($("#tpl-login").content.cloneNode(true));
-  $("#form-login").addEventListener("submit", async (e) => {
+
+  const form = $("#form-login");
+  const emailInput = form.querySelector('[name="email"]');
+  const passInput = form.querySelector('[name="password"]');
+
+  form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const submitBtn = $('#form-login button[type="submit"]');
+    clearAuthMsg("login-msg");
+    [emailInput, passInput].forEach(i => i.classList.remove("field-error"));
+
+    const email = (emailInput.value || "").trim();
+    const password = passInput.value || "";
+
+    // Validation avant tout appel réseau
+    if (!email) {
+      emailInput.classList.add("field-error");
+      return showAuthMsg("login-msg", "error", "Adresse e-mail manquante.", "Renseignez l'adresse e-mail de votre compte.");
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      emailInput.classList.add("field-error");
+      return showAuthMsg("login-msg", "error", "Adresse e-mail invalide.", "Vérifiez le format, par exemple : nom@domaine.fr");
+    }
+    if (!password) {
+      passInput.classList.add("field-error");
+      return showAuthMsg("login-msg", "error", "Mot de passe manquant.", "Saisissez votre mot de passe.");
+    }
+
+    const submitBtn = form.querySelector('button[type="submit"]');
     submitBtn.disabled = true;
     submitBtn.textContent = "Connexion…";
+
     try {
-      const fd = new FormData(e.target);
-      const { data, error } = await sb.auth.signInWithPassword({
-        email: fd.get("email"), password: fd.get("password")
-      });
-      if (error) { toast("Erreur : " + errMsg(error)); return; }
+      const { data, error } = await sb.auth.signInWithPassword({ email, password });
+
+      if (error) {
+        const [title, hint] = authErrorFr(error);
+        return showAuthMsg("login-msg", "error", title, hint);
+      }
+      if (!data?.session) {
+        return showAuthMsg("login-msg", "error", "Session non créée.",
+          "La connexion a été acceptée mais aucune session n'a été ouverte. Votre adresse e-mail doit probablement être confirmée.");
+      }
+
       // On charge le profil ici directement plutôt que d'attendre le
-      // callback onAuthStateChange, dont le timing exact n'est pas
-      // garanti par rapport à la suite de cette fonction — sans ça,
-      // la redirection ci-dessous pouvait se déclencher avant que
-      // state.user soit rempli, et échouer à distinguer admin/client.
-      if (data?.user) await loadProfile(data.user);
+      // callback onAuthStateChange, dont le timing n'est pas garanti :
+      // sans ça, la redirection pourrait partir avant que le rôle soit
+      // connu, et envoyer un admin vers l'espace client.
+      await loadProfile(data.user);
       renderAuthArea();
-      toast("Bienvenue !");
+
+      if (!state.user?.profileFound) {
+        showAuthMsg("login-msg", "info", "Connecté, mais profil incomplet.",
+          "Votre compte existe mais sa fiche n'a pas été trouvée en base. Si vous venez de créer le projet Supabase, exécutez setup-complet.sql.");
+        return;
+      }
+
+      toast("Bienvenue " + (state.user.full_name || "") + " !");
       navigate(isAdmin() ? "admin" : "catalogue");
+    } catch (err) {
+      const [title, hint] = authErrorFr(err);
+      showAuthMsg("login-msg", "error", title, hint);
     } finally {
       submitBtn.disabled = false;
       submitBtn.textContent = "Se connecter";
@@ -1848,25 +1978,109 @@ function renderLogin() {
 function renderSignup() {
   app.innerHTML = "";
   app.appendChild($("#tpl-signup").content.cloneNode(true));
-  $("#form-signup").addEventListener("submit", async (e) => {
+
+  const form = $("#form-signup");
+  const nameInput = form.querySelector('[name="full_name"]');
+  const emailInput = form.querySelector('[name="email"]');
+  const passInput = form.querySelector('[name="password"]');
+  const confirmInput = form.querySelector('[name="password_confirm"]');
+  const allInputs = [nameInput, emailInput, passInput, confirmInput];
+
+  form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const submitBtn = $('#form-signup button[type="submit"]');
+    clearAuthMsg("signup-msg");
+    allInputs.forEach(i => i.classList.remove("field-error"));
+
+    const fullName = (nameInput.value || "").trim();
+    const email = (emailInput.value || "").trim();
+    const password = passInput.value || "";
+    const confirm = confirmInput.value || "";
+
+    // ---- Validation complète, champ par champ ----
+    if (!fullName) {
+      nameInput.classList.add("field-error");
+      return showAuthMsg("signup-msg", "error", "Nom manquant.", "Indiquez votre nom et prénom.");
+    }
+    if (!email) {
+      emailInput.classList.add("field-error");
+      return showAuthMsg("signup-msg", "error", "Adresse e-mail manquante.", "Une adresse e-mail est nécessaire pour créer un compte.");
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      emailInput.classList.add("field-error");
+      return showAuthMsg("signup-msg", "error", "Adresse e-mail invalide.", "Vérifiez le format, par exemple : nom@domaine.fr");
+    }
+    if (!password) {
+      passInput.classList.add("field-error");
+      return showAuthMsg("signup-msg", "error", "Mot de passe manquant.", "Choisissez un mot de passe d'au moins 8 caractères.");
+    }
+    if (password.length < 8) {
+      passInput.classList.add("field-error");
+      return showAuthMsg("signup-msg", "error", "Mot de passe trop court.", "Il doit contenir au moins 8 caractères.");
+    }
+    if (!confirm) {
+      confirmInput.classList.add("field-error");
+      return showAuthMsg("signup-msg", "error", "Confirmation manquante.", "Retapez le mot de passe pour confirmer.");
+    }
+    if (password !== confirm) {
+      passInput.classList.add("field-error");
+      confirmInput.classList.add("field-error");
+      return showAuthMsg("signup-msg", "error", "Les mots de passe ne correspondent pas.", "Vérifiez les deux champs et réessayez.");
+    }
+
+    const submitBtn = form.querySelector('button[type="submit"]');
     submitBtn.disabled = true;
     submitBtn.textContent = "Création…";
+
     try {
-      const fd = new FormData(e.target);
-      const { error } = await sb.auth.signUp({
-        email: fd.get("email"), password: fd.get("password"),
-        options: { data: { full_name: fd.get("full_name") } }
+      // Vérifie d'abord que la base est prête : sinon l'inscription
+      // échouerait avec un message incompréhensible.
+      const dbReady = await checkDatabaseReady();
+      if (!dbReady) {
+        return showAuthMsg("signup-msg", "error", "La base de données n'est pas encore prête.",
+          "Exécutez le script setup-complet.sql dans Supabase (SQL Editor → New query → Run), puis réessayez.");
+      }
+
+      const { data, error } = await sb.auth.signUp({
+        email, password,
+        options: { data: { full_name: fullName } }
       });
-      if (error) { toast("Erreur : " + errMsg(error)); return; }
-      toast("Compte créé ! Vous pouvez vous connecter.");
-      navigate("login");
+
+      if (error) {
+        const [title, hint] = authErrorFr(error);
+        return showAuthMsg("signup-msg", "error", title, hint);
+      }
+
+      // Supabase renvoie un utilisateur sans identité quand l'adresse
+      // est déjà enregistrée (pour ne pas révéler l'existence du compte).
+      if (data?.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+        emailInput.classList.add("field-error");
+        return showAuthMsg("signup-msg", "error", "Cette adresse e-mail est déjà utilisée.",
+          "Connectez-vous plutôt, ou utilisez une autre adresse.");
+      }
+
+      // Si une session est immédiatement ouverte, la confirmation par
+      // e-mail est désactivée : on connecte directement l'utilisateur.
+      if (data?.session) {
+        await loadProfile(data.user);
+        renderAuthArea();
+        toast("Compte créé, bienvenue !");
+        navigate(isAdmin() ? "admin" : "catalogue");
+        return;
+      }
+
+      // Sinon, Supabase attend une confirmation par e-mail.
+      showAuthMsg("signup-msg", "success", "Compte créé.",
+        "Un e-mail de confirmation vous a été envoyé : ouvrez-le puis revenez vous connecter. " +
+        "Si vous ne recevez rien, désactivez « Confirm email » dans Supabase (Authentication → Providers → Email).");
+    } catch (err) {
+      const [title, hint] = authErrorFr(err);
+      showAuthMsg("signup-msg", "error", title, hint);
     } finally {
       submitBtn.disabled = false;
       submitBtn.textContent = "Créer mon compte";
     }
   });
+
   $("#link-to-login").addEventListener("click", (e) => { e.preventDefault(); navigate("login"); });
 }
 
